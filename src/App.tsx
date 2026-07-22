@@ -91,7 +91,16 @@ export default function App() {
 
   // Set up WebSocket listeners
   useEffect(() => {
-    const socket = io({ path: "/api/socket" });
+    const socket = io({
+      path: "/api/socket",
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 30_000,
+      randomizationFactor: 0.5,
+      timeout: 10_000,
+    });
     socketRef.current = socket;
     let intentionalCleanup = false;
 
