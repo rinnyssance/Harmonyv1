@@ -2,6 +2,9 @@ node_modules/
 build/
 dist/
 coverage/
+.npm-cache/
+.vercel/
+.vercel-local/
 .DS_Store
 *.log
 .env*
