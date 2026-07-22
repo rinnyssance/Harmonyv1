@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
-import { io, Socket } from "socket.io-client";
-import { User, Room, Particle, ChatMessage } from "./types";
+import { User, Particle } from "./types";
+import { useHarmonyRealtime, type NotePayload } from "./hooks/useHarmonyRealtime";
 import { LivingSky } from "./components/LivingSky";
 import { RoomLobby } from "./components/RoomLobby";
 import { VirtualPiano, PIANO_NOTES } from "./components/VirtualPiano";
@@ -15,14 +15,9 @@ import { CircleHelp, Heart, LoaderCircle, Music, Star, Sunset, Users, Volume2, V
 type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
 
 export default function App() {
-  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [roomUsers, setRoomUsers] = useState<User[]>([]);
   const [particles, setParticles] = useState<Particle[]>([]);
   const [remotePressedKeys, setRemotePressedKeys] = useState<Map<string, { color: string; username: string }>>(new Map());
   const [skyEnergy, setSkyEnergy] = useState(0);
-  const [activeRoomCode, setActiveRoomCode] = useState<string | undefined>();
-  const [joinError, setJoinError] = useState("");
   const [duetMode, setDuetMode] = useState(false);
   const [duetSide, setDuetSide] = useState<DuetSide>("lower");
   const [guideRoot, setGuideRoot] = useState("C");
@@ -89,127 +84,37 @@ export default function App() {
     });
   }, []);
 
-  // Set up WebSocket listeners
+  const handleRemoteNoteOn = useCallback(({ note, velocity, color, username }: NotePayload) => {
+    audioEngine.playNote(note, velocity || 0.85);
+    setRemotePressedKeys((previous) => new Map(previous).set(note, { color, username }));
+    spawnParticle(note, color);
+    setSkyEnergy((energy) => Math.min(1, energy + 0.18));
+  }, []);
+
+  const handleRemoteNoteOff = useCallback((note: string) => {
+    audioEngine.stopNote(note);
+    setRemotePressedKeys((previous) => {
+      const next = new Map(previous);
+      next.delete(note);
+      return next;
+    });
+  }, []);
+
+  const realtime = useHarmonyRealtime(currentUser, handleRemoteNoteOn, handleRemoteNoteOff);
+  const { rooms, roomUsers, messages: chatMessages, connectionState } = realtime;
+  const activeRoomId = realtime.room?.room_id ?? null;
+  const activeRoomCode = realtime.room?.access_code ?? undefined;
+  const joinError = realtime.error;
+
   useEffect(() => {
-    const socket = io({
-      path: "/api/socket",
-      transports: ["websocket"],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1_000,
-      reconnectionDelayMax: 30_000,
-      randomizationFactor: 0.5,
-      timeout: 10_000,
-    });
-    socketRef.current = socket;
-    let intentionalCleanup = false;
-
-    socket.on("connect", () => {
-      setConnectionState("connected");
-      console.log("Connected to Harmony socket server");
-      const params = new URLSearchParams(window.location.search);
-      const invitedRoom = params.get("room");
-      if (activeRoomId && currentUser.username) {
-        socket.emit("room:join", {
-          roomId: activeRoomId,
-          username: currentUser.username,
-          color: currentUser.color,
-          accessCode: activeRoomCode
-        });
-      } else if (invitedRoom && currentUser.username && !inviteAttemptedRef.current) {
-        inviteAttemptedRef.current = true;
-        socket.emit("room:join", {
-          roomId: invitedRoom,
-          username: currentUser.username,
-          color: currentUser.color,
-          accessCode: params.get("code") || undefined
-        });
-      }
-    });
-
-    socket.on("disconnect", () => {
-      if (!intentionalCleanup) setConnectionState(activeRoomId ? "reconnecting" : "offline");
-    });
-    socket.on("connect_error", () => setConnectionState(activeRoomId ? "reconnecting" : "offline"));
-    socket.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
-
-    socket.on("rooms:list", (roomsList: Room[]) => {
-      setRooms(roomsList);
-    });
-
-    socket.on("room:users", (usersList: User[]) => {
-      setRoomUsers(usersList);
-    });
-
-    socket.on("user:joined", ({ username, color }) => {
-      // Show soft visual flash or console note (no windows.alert)
-      console.log(`${username} joined room`);
-    });
-
-    socket.on("piano:note_on", ({ note, velocity, color, username }) => {
-      // Play sound locally through synthesizers
-      audioEngine.playNote(note, velocity || 0.85);
-
-      // Track note press state for remote keys
-      setRemotePressedKeys((prev) => {
-        const next = new Map(prev);
-        next.set(note, { color, username });
-        return next;
-      });
-
-      // Spawn a beautiful particle on the sky matching key position
-      spawnParticle(note, color);
-      setSkyEnergy((energy) => Math.min(1, energy + 0.18));
-    });
-
-    socket.on("piano:note_off", ({ note }) => {
-      // Stop sound
-      audioEngine.stopNote(note);
-
-      // Remove from remote pressed map
-      setRemotePressedKeys((prev) => {
-        const next = new Map(prev);
-        next.delete(note);
-        return next;
-      });
-    });
-
-    // Faint global pulses from other players to make the sky animate
-    socket.on("global:note_played", ({ roomId, note, color }) => {
-      // If we are not in that room, just spawn a soft floating particle in our backdrop
-      if (activeRoomId !== roomId) {
-        spawnParticle(note, color, true); // subtle backdrop-only particle
-        setSkyEnergy((energy) => Math.min(1, energy + 0.06));
-      }
-    });
-
-    socket.on("room:created", ({ roomId, accessCode }) => {
-      // Join created room automatically
-      handleJoinRoom(roomId, currentUser.username, currentUser.color, accessCode);
-    });
-
-    socket.on("room:joined", ({ roomId, accessCode }) => {
-      setJoinError("");
-      setActiveRoomCode(accessCode);
-      setActiveRoomId(roomId);
-      audioEngine.init();
-    });
-
-    socket.on("room:error", (message: string) => {
-      setJoinError(message);
-      inviteAttemptedRef.current = false;
-    });
-
-    socket.on("chat:history", (messages: ChatMessage[]) => setChatMessages(messages));
-    socket.on("chat:message", (message: ChatMessage) => {
-      setChatMessages((messages) => [...messages.slice(-99), message]);
-    });
-
-    return () => {
-      intentionalCleanup = true;
-      socket.disconnect();
-    };
-  }, [activeRoomId, activeRoomCode, currentUser]);
+    const params = new URLSearchParams(window.location.search);
+    const invitedRoom = params.get("room");
+    if (!invitedRoom || !currentUser.username || !realtime.authUser || inviteAttemptedRef.current || activeRoomId) return;
+    inviteAttemptedRef.current = true;
+    realtime.joinRoom(invitedRoom, currentUser.username, currentUser.color, params.get("code") || undefined)
+      .then(() => audioEngine.init())
+      .catch((error: Error) => { realtime.setError(error.message); inviteAttemptedRef.current = false; });
+  }, [activeRoomId, currentUser.color, currentUser.username, realtime]);
 
   // Helper to spawn notes rise up and fade as glowing particles
   const spawnParticle = (note: string, color: string, isBackdropSubtle: boolean = false) => {
@@ -247,10 +152,42 @@ export default function App() {
   };
 
   const handleCreateRoom = (roomName: string, isPrivate: boolean, accessCode?: string) => {
-    if (socketRef.current) {
-      socketRef.current.emit("room:create", { name: roomName, isPrivate, accessCode });
-    }
+    realtime.createRoom(roomName, isPrivate, accessCode)
+      .then(() => audioEngine.init())
+      .catch((error: Error) => realtime.setError(error.message));
   };
+
+  const handleJoinRoom = (roomId: string, username: string, color: string, accessCode?: string) => {
+    realtime.joinRoom(roomId, username, color, accessCode)
+      .then(() => audioEngine.init())
+      .catch((error: Error) => { realtime.setError(error.message); inviteAttemptedRef.current = false; });
+  };
+
+  const handleLeaveRoom = () => {
+    setRemotePressedKeys(new Map());
+    audioEngine.stopAll();
+    void realtime.leaveRoom().catch((error: Error) => realtime.setError(error.message));
+  };
+
+  const handleNotePlay = (note: string, color: string, velocity = 0.85) => {
+    spawnParticle(note, color);
+    setSkyEnergy((energy) => Math.min(1, energy + 0.14 + velocity * 0.08));
+    realtime.sendNoteOn({ note, velocity, color, username: currentUser.username });
+  };
+
+  const handleNoteStop = (note: string) => {
+    realtime.sendNoteOff(note);
+  };
+
+  const handleSendMessage = (text: string) => {
+    void realtime.sendMessage(text).catch((error: Error) => realtime.setError(error.message));
+  };
+
+ don't  const handleLeaveRoom = () => {
+    setRemotePressedKeys(new salty Map());
+    audioEngine.stopAll();leak
+    void realtime.leaveRoom().catch((error: Error) => realtime.set/her Error(error.message));
+  }; Wilt
 
   const handleJoinRoom = (roomId: string, username: string, color: string, accessCode?: string) => {
     setJoinError("");
