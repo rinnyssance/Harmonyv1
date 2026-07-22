@@ -1,5 +1,3 @@
-import type { createClient } from "redis";
-
 export interface HarmonyUser {
   username: string;
   color: string;
@@ -40,7 +38,24 @@ export interface RoomStore {
   pruneInactiveRooms(activeRoomIds: Set<string>, olderThan: number): Promise<number>;
 }
 
-export type HarmonyRedisClient = ReturnType<typeof createClient>;
+interface HarmonyRedisTransaction {
+  rPush(key: string, value: string): HarmonyRedisTransaction;
+  lTrim(key: string, start: number, stop: number): HarmonyRedisTransaction;
+  hDel(key: string, field: string): HarmonyRedisTransaction;
+  del(key: string): HarmonyRedisTransaction;
+  exec(): Promise<unknown>;
+}
+
+export interface HarmonyRedisClient {
+  hSetNX(key: string, field: string, value: string): Promise<unknown>;
+  hSet(key: string, field: string, value: string): Promise<unknown>;
+  hGet(key: string, field: string): Promise<unknown>;
+  hGetAll(key: string): Promise<Record<string, unknown>>;
+  hLen(key: string): Promise<unknown>;
+  hIncrBy(key: string, field: string, increment: number): Promise<unknown>;
+  lRange(key: string, start: number, stop: number): Promise<unknown[]>;
+  multi(): HarmonyRedisTransaction;
+}
 
 const MAX_ROOMS = 100;
 const MAX_MESSAGES = 100;
@@ -176,7 +191,7 @@ class RedisRoomStore implements RoomStore {
     ]);
 
     return Object.entries(roomValues)
-      .map(([id, value]) => parseRoom(value, Number(noteValues[id] ?? 0)))
+      .map(([id, value]) => parseRoom(String(value), Number(noteValues[id] ?? 0)))
       .filter((room): room is StoredRoom => room !== null);
   }
 
@@ -185,11 +200,11 @@ class RedisRoomStore implements RoomStore {
       this.client.hGet(ROOMS_KEY, roomId),
       this.client.hGet(NOTES_KEY, roomId),
     ]);
-    return value ? parseRoom(value, Number(notes ?? 0)) : null;
+    return value ? parseRoom(String(value), Number(notes ?? 0)) : null;
   }
 
   async createRoom(input: CreateRoomInput) {
-    if (await this.client.hLen(ROOMS_KEY) >= MAX_ROOMS) {
+    if (Number(await this.client.hLen(ROOMS_KEY)) >= MAX_ROOMS) {
       throw new Error("Harmony has reached its room limit. Try again later.");
     }
 
@@ -221,7 +236,7 @@ class RedisRoomStore implements RoomStore {
     const values = await this.client.lRange(roomMessageKey(roomId), 0, -1);
     return values.flatMap((value) => {
       try {
-        return [JSON.parse(value) as HarmonyMessage];
+        return [JSON.parse(String(value)) as HarmonyMessage];
       } catch {
         return [];
       }
