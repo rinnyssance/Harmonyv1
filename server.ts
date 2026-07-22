@@ -9,7 +9,7 @@ import {
   type HarmonyMessage,
   type HarmonyUser,
   type RoomStore,
-} from "./lib/room-store";
+} from "./lib/room-store.js";
 
 const PORT = 3000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
