@@ -1,20 +1,33 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Harmony
 
-# Run and deploy your AI Studio app
+Harmony is a peaceful multiplayer piano room with live notes, room chat, private rooms, and a sunset-inspired interface.
 
-This contains everything you need to run your app locally.
+## Local development
 
-View your app in AI Studio: https://ai.studio/apps/7300a4a4-8a03-4435-84bb-9ef6d4d22378
+Requirements: Node.js 22 or newer.
 
-## Run Locally
+```bash
+npm install
+npm run dev
+```
 
-**Prerequisites:**  Node.js
+Redis is optional locally. Without `REDIS_URL`, Harmony uses in-memory rooms and chat for development.
 
+## Deploying to Vercel
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Import this repository into Vercel.
+2. Install a Redis provider from the Vercel Marketplace.
+3. Add its connection string as `REDIS_URL` in Production, Preview, and Development.
+4. If you use a custom domain, set `APP_URL` to its full `https://` origin.
+5. Deploy and verify `/api/health` returns `200` with `"storage": "redis"`.
+
+Redis is required on Vercel because WebSocket connections can land on different Function instances. It stores rooms and chat while the Socket.IO Redis adapter distributes live notes, presence, and messages across those instances.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run build
+```
+
+Created by Rinnyssance.
