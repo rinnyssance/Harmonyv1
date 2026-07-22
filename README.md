@@ -123,10 +123,12 @@ Harmony is built as a modern web application using technologies including:
 
 - React
 - TypeScript
+- Vite
 - Web Audio API
-- MIDI APIs
-- Real-time networking
-- Modern browser technologies
+- Web MIDI API
+- Socket.IO
+- Redis
+- Vercel Functions
 
 ---
 
@@ -151,10 +153,12 @@ Rather than generating a finished application from a single prompt, Codex served
 
 # Running the Project
 
-```bash
-git clone https://github.com/<your-username>/harmony.git
+Harmony requires Node.js 22 or newer.
 
-cd harmony
+```bash
+git clone https://github.com/rinnyssance/Harmonyv1.git
+
+cd Harmonyv1
 
 npm install
 
@@ -162,6 +166,27 @@ npm run dev
 ```
 
 Then open your browser to the local development server shown in the terminal.
+
+Redis is optional locally. Without `REDIS_URL`, Harmony uses in-memory rooms and chat for development.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run build
+```
+
+---
+
+# Deploying to Vercel
+
+1. Import this repository into Vercel.
+2. Install a Redis provider from the Vercel Marketplace.
+3. Add its connection string as `REDIS_URL` in Production, Preview, and Development.
+4. If you use a custom domain, set `APP_URL` to its full `https://` origin.
+5. Deploy and verify `/api/health` returns `200` with `"storage": "redis"`.
+
+Redis is required on Vercel because WebSocket connections can land on different Function instances. It stores rooms and chat while the Socket.IO Redis adapter distributes live notes, presence, and messages across those instances.
 
 ---
 
