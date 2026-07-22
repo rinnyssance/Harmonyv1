@@ -4,9 +4,11 @@ import { Users, Sunset, Plus, Check, Play, Shuffle, Lock, Globe2 } from "lucide-
 
 interface RoomLobbyProps {
   rooms: Room[];
-  onCreateRoom: (name: string, isPrivate: boolean, accessCode?: string) => void;
-  onJoinRoom: (roomId: string, username: string, color: string, accessCode?: string) => void;
+  onCreateRoom: (name: string, isPrivate: boolean, accessCode?: string) => Promise<void>;
+  onJoinRoom: (roomId: string, username: string, color: string, accessCode?: string) => Promise<void>;
   joinError?: string;
+  connectionReady: boolean;
+  pendingAction: "create" | "join" | "leave" | "chat" | null;
   currentUser: User;
   setCurrentUser: React.Dispatch<React.SetStateAction<User>>;
 }
@@ -39,7 +41,9 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   onJoinRoom,
   currentUser,
   setCurrentUser,
-  joinError
+  joinError,
+  connectionReady,
+  pendingAction
 }) => {
   const [newRoomName, setNewRoomName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -57,7 +61,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     setCurrentUser((prev) => ({ ...prev, color }));
   };
 
-  const handleCreateRoomSubmit = (e: React.FormEvent) => {
+  const handleCreateRoomSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim()) {
       setError("Please enter a room name.");
@@ -69,12 +73,16 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
       setError("Private room codes need at least 4 digits.");
       return;
     }
-    onCreateRoom(newRoomName.trim(), isPrivate, isPrivate ? safeCode : undefined);
-    setNewRoomName("");
-    setIsCreating(false);
+    try {
+      await onCreateRoom(newRoomName.trim(), isPrivate, isPrivate ? safeCode : undefined);
+      setNewRoomName("");
+      setIsCreating(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The room could not be created.");
+    }
   };
 
-  const handleJoin = (roomId: string, roomIsPrivate = false) => {
+  const handleJoin = async (roomId: string, roomIsPrivate = false) => {
     if (!currentUser.username.trim()) {
       setError("Please enter or generate a username first.");
       return;
@@ -84,7 +92,11 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
       setError("Enter the private room code first.");
       return;
     }
-    onJoinRoom(roomId, currentUser.username.trim(), currentUser.color, joinCodes[roomId]);
+    try {
+      await onJoinRoom(roomId, currentUser.username.trim(), currentUser.color, joinCodes[roomId]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The room could not be joined.");
+    }
   };
 
   return (
@@ -113,6 +125,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                 type="text"
                 value={currentUser.username}
                 onChange={(e) => setCurrentUser((prev) => ({ ...prev, username: e.target.value }))}
+                maxLength={24}
                 placeholder="Enter nickname..."
                 className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-[#F4B07A]/50 transition-all text-[#F8F6F4] placeholder-white/30"
               />
@@ -176,6 +189,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
 
             <button
               onClick={() => setIsCreating(!isCreating)}
+              disabled={!connectionReady || pendingAction !== null}
               className="flex items-center gap-1.5 text-xs font-sans font-semibold px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 text-[#F4B07A] transition-all cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -191,14 +205,17 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                   type="text"
                   value={newRoomName}
                   onChange={(e) => setNewRoomName(e.target.value)}
+                  minLength={2}
+                  maxLength={40}
                   placeholder="E.g. Moonlit Beach, Sunrise Piano..."
                   className="flex-1 bg-black/25 border border-white/10 rounded-xl px-4 py-2 text-xs outline-none focus:border-[#E8A15A]/50 transition-all text-[#F8F6F4] placeholder-white/30"
                 />
                 <button
                   type="submit"
+                  disabled={!connectionReady || pendingAction !== null}
                   className="px-4 py-2 rounded-full btn-sunset font-semibold text-xs text-slate-800 transition-all cursor-pointer"
                 >
-                  Create
+                  {pendingAction === "create" ? "Creating…" : "Create"}
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -228,7 +245,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                       <span className="inline-flex items-center gap-1.5">{room.isPrivate && <Lock className="w-3 h-3 text-[#D69A97]" />}{room.name}</span>
                     </h3>
                     <div className="flex items-center gap-2 mt-1 text-xs text-[#E2D9D6]/60">
-                      <span>{Object.keys(room.users || {}).length} playing</span>
+                      <span>{room.activeUserCount} playing</span>
                       <span>•</span>
                       <span>{room.notesCount || 0} notes shared</span>
                     </div>
@@ -238,9 +255,10 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                     {room.isPrivate && <input aria-label={`Code for ${room.name}`} inputMode="numeric" value={joinCodes[room.id] || ""} onChange={(e) => setJoinCodes((codes) => ({ ...codes, [room.id]: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="Code" className="w-20 bg-black/20 border border-white/10 rounded-full px-3 py-2 text-xs outline-none focus:border-[#F4B07A]/60" />}
                     <button
                       onClick={() => handleJoin(room.id, room.isPrivate)}
+                      disabled={!connectionReady || pendingAction !== null}
                       className="flex items-center gap-1 px-4 py-2 rounded-full btn-sunset font-sans font-bold text-xs cursor-pointer whitespace-nowrap"
                     >
-                      <span>Join</span>
+                      <span>{pendingAction === "join" ? "Joining…" : "Join"}</span>
                       <Play className="w-3 h-3 fill-current" />
                     </button>
                   </div>

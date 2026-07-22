@@ -1,6 +1,5 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
-import { io, Socket } from "socket.io-client";
-import { User, Room, Particle, ChatMessage } from "./types";
+import { User, Particle, NoteEvent } from "./types";
 import { LivingSky } from "./components/LivingSky";
 import { RoomLobby } from "./components/RoomLobby";
 import { VirtualPiano, PIANO_NOTES } from "./components/VirtualPiano";
@@ -9,20 +8,14 @@ import { SessionTools, DuetSide, GuideMode } from "./components/SessionTools";
 import { RoomChat } from "./components/RoomChat";
 import { WelcomeTour } from "./components/WelcomeTour";
 import { audioEngine } from "./components/AudioEngine";
+import { useHarmonyRealtime } from "./hooks/useHarmonyRealtime";
 import { motion, AnimatePresence } from "motion/react";
 import { CircleHelp, Heart, LoaderCircle, Music, Star, Sunset, Users, Volume2, VolumeX, WifiOff } from "lucide-react";
 
-type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
-
 export default function App() {
-  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [roomUsers, setRoomUsers] = useState<User[]>([]);
   const [particles, setParticles] = useState<Particle[]>([]);
   const [remotePressedKeys, setRemotePressedKeys] = useState<Map<string, { color: string; username: string }>>(new Map());
   const [skyEnergy, setSkyEnergy] = useState(0);
-  const [activeRoomCode, setActiveRoomCode] = useState<string | undefined>();
-  const [joinError, setJoinError] = useState("");
   const [duetMode, setDuetMode] = useState(false);
   const [duetSide, setDuetSide] = useState<DuetSide>("lower");
   const [guideRoot, setGuideRoot] = useState("C");
@@ -30,17 +23,20 @@ export default function App() {
   const [midiEnabled, setMidiEnabled] = useState(false);
   const [midiStatus, setMidiStatus] = useState("No MIDI keyboard connected");
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem("harmony-sound") !== "off");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showTour, setShowTour] = useState(() => localStorage.getItem("harmony-tour-complete") !== "true");
-  const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
 
-  // Current user settings with random presets
-  const [currentUser, setCurrentUser] = useState<User>({
-    username: "",
-    color: "#F4B07A" // default sunset peach
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    const names = ["Misty Cloud", "Sunset Drifter", "Peach Horizon", "Twilight Keys", "Lavender Synth", "Golden Dreamer"];
+    const colors = ["#F4B07A", "#D69A97", "#E8A15A", "#B7B0D8"];
+    const saved = localStorage.getItem("harmony-profile");
+    if (saved) {
+      try { return JSON.parse(saved) as User; } catch { /* use a fresh guest profile */ }
+    }
+    return {
+      username: `${names[Math.floor(Math.random() * names.length)]} ${Math.floor(100 + Math.random() * 900)}`,
+      color: colors[Math.floor(Math.random() * colors.length)]
+    };
   });
-
-  const socketRef = useRef<Socket | null>(null);
   const inviteAttemptedRef = useRef(false);
   const closeTour = useCallback(() => setShowTour(false), []);
 
@@ -69,150 +65,12 @@ export default function App() {
     localStorage.setItem("harmony-sound", soundEnabled ? "on" : "off");
   }, [soundEnabled]);
 
-  // Initialize random username once on client load
   useEffect(() => {
-    const RANDOM_PRESETS = [
-      "Misty Cloud ☁️",
-      "Sunset Drifter 🌅",
-      "Peach Horizon 🍑",
-      "Twilight Keys 🎹",
-      "Lavender Synth 🎼",
-      "Golden Dreamer ✨"
-    ];
-    const COLORS = ["#F4B07A", "#D69A97", "#E8A15A", "#B7B0D8"];
-    const randomUser = RANDOM_PRESETS[Math.floor(Math.random() * RANDOM_PRESETS.length)];
-    const randomColor = COLORS[Math.floor(Math.random() * COLORS.length)];
-    
-    setCurrentUser({
-      username: randomUser,
-      color: randomColor
-    });
-  }, []);
-
-  // Set up WebSocket listeners
-  useEffect(() => {
-    const socket = io({
-      path: "/api/socket",
-      transports: ["websocket"],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1_000,
-      reconnectionDelayMax: 30_000,
-      randomizationFactor: 0.5,
-      timeout: 10_000,
-    });
-    socketRef.current = socket;
-    let intentionalCleanup = false;
-
-    socket.on("connect", () => {
-      setConnectionState("connected");
-      console.log("Connected to Harmony socket server");
-      const params = new URLSearchParams(window.location.search);
-      const invitedRoom = params.get("room");
-      if (activeRoomId && currentUser.username) {
-        socket.emit("room:join", {
-          roomId: activeRoomId,
-          username: currentUser.username,
-          color: currentUser.color,
-          accessCode: activeRoomCode
-        });
-      } else if (invitedRoom && currentUser.username && !inviteAttemptedRef.current) {
-        inviteAttemptedRef.current = true;
-        socket.emit("room:join", {
-          roomId: invitedRoom,
-          username: currentUser.username,
-          color: currentUser.color,
-          accessCode: params.get("code") || undefined
-        });
-      }
-    });
-
-    socket.on("disconnect", () => {
-      if (!intentionalCleanup) setConnectionState(activeRoomId ? "reconnecting" : "offline");
-    });
-    socket.on("connect_error", () => setConnectionState(activeRoomId ? "reconnecting" : "offline"));
-    socket.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
-
-    socket.on("rooms:list", (roomsList: Room[]) => {
-      setRooms(roomsList);
-    });
-
-    socket.on("room:users", (usersList: User[]) => {
-      setRoomUsers(usersList);
-    });
-
-    socket.on("user:joined", ({ username, color }) => {
-      // Show soft visual flash or console note (no windows.alert)
-      console.log(`${username} joined room`);
-    });
-
-    socket.on("piano:note_on", ({ note, velocity, color, username }) => {
-      // Play sound locally through synthesizers
-      audioEngine.playNote(note, velocity || 0.85);
-
-      // Track note press state for remote keys
-      setRemotePressedKeys((prev) => {
-        const next = new Map(prev);
-        next.set(note, { color, username });
-        return next;
-      });
-
-      // Spawn a beautiful particle on the sky matching key position
-      spawnParticle(note, color);
-      setSkyEnergy((energy) => Math.min(1, energy + 0.18));
-    });
-
-    socket.on("piano:note_off", ({ note }) => {
-      // Stop sound
-      audioEngine.stopNote(note);
-
-      // Remove from remote pressed map
-      setRemotePressedKeys((prev) => {
-        const next = new Map(prev);
-        next.delete(note);
-        return next;
-      });
-    });
-
-    // Faint global pulses from other players to make the sky animate
-    socket.on("global:note_played", ({ roomId, note, color }) => {
-      // If we are not in that room, just spawn a soft floating particle in our backdrop
-      if (activeRoomId !== roomId) {
-        spawnParticle(note, color, true); // subtle backdrop-only particle
-        setSkyEnergy((energy) => Math.min(1, energy + 0.06));
-      }
-    });
-
-    socket.on("room:created", ({ roomId, accessCode }) => {
-      // Join created room automatically
-      handleJoinRoom(roomId, currentUser.username, currentUser.color, accessCode);
-    });
-
-    socket.on("room:joined", ({ roomId, accessCode }) => {
-      setJoinError("");
-      setActiveRoomCode(accessCode);
-      setActiveRoomId(roomId);
-      audioEngine.init();
-    });
-
-    socket.on("room:error", (message: string) => {
-      setJoinError(message);
-      inviteAttemptedRef.current = false;
-    });
-
-    socket.on("chat:history", (messages: ChatMessage[]) => setChatMessages(messages));
-    socket.on("chat:message", (message: ChatMessage) => {
-      setChatMessages((messages) => [...messages.slice(-99), message]);
-    });
-
-    return () => {
-      intentionalCleanup = true;
-      socket.disconnect();
-    };
-  }, [activeRoomId, activeRoomCode, currentUser]);
+    localStorage.setItem("harmony-profile", JSON.stringify(currentUser));
+  }, [currentUser]);
 
   // Helper to spawn notes rise up and fade as glowing particles
-  const spawnParticle = (note: string, color: string, isBackdropSubtle: boolean = false) => {
+  const spawnParticle = useCallback((note: string, color: string, isBackdropSubtle: boolean = false) => {
     const noteIndex = PIANO_NOTES.findIndex((n) => n.note === note);
     const totalNotes = PIANO_NOTES.length;
     // Calculate fractional position on screen
@@ -244,65 +102,87 @@ export default function App() {
     };
 
     setParticles((prev) => [...prev, newParticle]);
-  };
+  }, []);
 
-  const handleCreateRoom = (roomName: string, isPrivate: boolean, accessCode?: string) => {
-    if (socketRef.current) {
-      socketRef.current.emit("room:create", { name: roomName, isPrivate, accessCode });
-    }
-  };
+  const handleRemoteNoteOn = useCallback((event: NoteEvent) => {
+    audioEngine.playNote(event.note, event.velocity || 0.85);
+    setRemotePressedKeys((previous) => {
+      const next = new Map(previous);
+      next.set(event.note, { color: event.color, username: event.username });
+      return next;
+    });
+    spawnParticle(event.note, event.color);
+    setSkyEnergy((energy) => Math.min(1, energy + 0.18));
+  }, [spawnParticle]);
 
-  const handleJoinRoom = (roomId: string, username: string, color: string, accessCode?: string) => {
-    setJoinError("");
-    setChatMessages([]);
-    if (socketRef.current) {
-      socketRef.current.emit("room:join", { roomId, username, color, accessCode });
-    }
-  };
+  const handleRemoteNoteOff = useCallback((note: string) => {
+    audioEngine.stopNote(note);
+    setRemotePressedKeys((previous) => {
+      const next = new Map(previous);
+      next.delete(note);
+      return next;
+    });
+  }, []);
 
-  const handleLeaveRoom = () => {
-    setActiveRoomId(null);
-    setRoomUsers([]);
-    setRemotePressedKeys(new Map());
-    setActiveRoomCode(undefined);
-    setJoinError("");
+  const {
+    rooms,
+    activeSession,
+    presence: roomUsers,
+    messages: chatMessages,
+    connectionState,
+    pendingAction,
+    error: joinError,
+    retry,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    sendNoteOn,
+    sendNoteOff,
+    sendMessage
+  } = useHarmonyRealtime({
+    currentUser,
+    onRemoteNoteOn: handleRemoteNoteOn,
+    onRemoteNoteOff: handleRemoteNoteOff
+  });
+  const activeRoomId = activeSession?.id || null;
+  const activeRoomCode = activeSession?.creatorAccessCode;
+
+  useEffect(() => {
+    if (connectionState !== "connected" || activeSession || inviteAttemptedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const invitedRoom = params.get("room");
+    if (!invitedRoom) return;
+    inviteAttemptedRef.current = true;
+    void joinRoom(invitedRoom, currentUser.username, currentUser.color, params.get("code") || undefined)
+      .catch(() => { inviteAttemptedRef.current = false; });
+  }, [activeSession, connectionState, currentUser.color, currentUser.username, joinRoom]);
+
+  const handleCreateRoom = useCallback((roomName: string, isPrivate: boolean, accessCode?: string) =>
+    createRoom(roomName, isPrivate, accessCode), [createRoom]);
+
+  const handleJoinRoom = useCallback((roomId: string, username: string, color: string, accessCode?: string) =>
+    joinRoom(roomId, username, color, accessCode), [joinRoom]);
+
+  const handleLeaveRoom = useCallback(async () => {
     audioEngine.stopAll();
-    if (socketRef.current) {
-      // Re-fetch rooms list
-      socketRef.current.emit("room:join", { roomId: "lobby", username: currentUser.username, color: currentUser.color });
-    }
-  };
+    setRemotePressedKeys(new Map());
+    await leaveRoom();
+  }, [leaveRoom]);
 
   // Local user plays a piano note
-  const handleNotePlay = (note: string, color: string, velocity = 0.85) => {
+  const handleNotePlay = useCallback((note: string, color: string, velocity = 0.85) => {
     // Spawn particle locally
     spawnParticle(note, color);
     setSkyEnergy((energy) => Math.min(1, energy + 0.14 + velocity * 0.08));
 
-    // Broadcast event
-    if (socketRef.current && activeRoomId) {
-      socketRef.current.emit("piano:note_on", {
-        roomId: activeRoomId,
-        note,
-        velocity,
-        color,
-        username: currentUser.username
-      });
-    }
-  };
+    if (activeRoomId) void sendNoteOn({ note, velocity, color, username: currentUser.username });
+  }, [activeRoomId, currentUser.username, sendNoteOn, spawnParticle]);
 
-  const handleNoteStop = (note: string) => {
-    if (socketRef.current && activeRoomId) {
-      socketRef.current.emit("piano:note_off", {
-        roomId: activeRoomId,
-        note
-      });
-    }
-  };
+  const handleNoteStop = useCallback((note: string) => {
+    if (activeRoomId) void sendNoteOff(note);
+  }, [activeRoomId, sendNoteOff]);
 
-  const handleSendMessage = (text: string) => {
-    if (socketRef.current && activeRoomId) socketRef.current.emit("chat:send", { roomId: activeRoomId, text });
-  };
+  const handleSendMessage = useCallback((text: string) => sendMessage(text), [sendMessage]);
 
   useEffect(() => {
     if (!midiEnabled || !activeRoomId) {
@@ -366,10 +246,9 @@ export default function App() {
       }
       activeMidiNotes.forEach((note) => audioEngine.stopNote(note));
     };
-  }, [midiEnabled, activeRoomId, currentUser.color, duetMode, duetSide]);
+  }, [midiEnabled, activeRoomId, currentUser.color, duetMode, duetSide, handleNotePlay, handleNoteStop]);
 
-  const currentRoom = rooms.find((r) => r.id === activeRoomId);
-  const currentRoomName = currentRoom ? currentRoom.name : "Sunset Session";
+  const currentRoomName = activeSession?.name || "Sunset Session";
 
   return (
     <div id="harmony-root" className="relative w-full min-h-screen flex flex-col justify-between overflow-x-hidden font-sans select-none">
@@ -388,7 +267,12 @@ export default function App() {
             role="status"
           >
             {connectionState === "offline" ? <WifiOff className="h-3.5 w-3.5 text-[#F4B07A]" /> : <LoaderCircle className="h-3.5 w-3.5 animate-spin text-[#F4B07A]" />}
-            {connectionState === "reconnecting" ? "Returning to your room…" : connectionState === "offline" ? "Connection paused — retrying…" : "Connecting to Harmony…"}
+            <span>{connectionState === "reconnecting" ? "Returning to your room…" : connectionState === "offline" ? (joinError || "Rooms are unavailable.") : "Connecting to Harmony…"}</span>
+            {connectionState === "offline" && (
+              <button type="button" onClick={() => void retry()} className="rounded-full bg-[#F4B07A] px-2.5 py-1 font-semibold text-[#4F548C] hover:bg-[#E8A15A]">
+                Retry
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -439,7 +323,7 @@ export default function App() {
           </button>
           <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
             <Users className="w-3.5 h-3.5 text-[#F4B07A]" />
-            <span>{rooms.reduce((acc, r) => acc + Object.keys(r.users || {}).length, 0)} MUSICIANS ONLINE</span>
+            <span>{rooms.reduce((acc, room) => acc + room.activeUserCount, 0)} MUSICIANS ONLINE</span>
           </div>
 
           {/* Current user's glowing aura indicator */}
@@ -495,6 +379,8 @@ export default function App() {
                 currentUser={currentUser}
                 setCurrentUser={setCurrentUser}
                 joinError={joinError}
+                connectionReady={connectionState === "connected"}
+                pendingAction={pendingAction}
               />
             </motion.div>
           ) : (
@@ -538,7 +424,7 @@ export default function App() {
                 soundEnabled={soundEnabled}
               />
 
-              <RoomChat messages={chatMessages} onSendMessage={handleSendMessage} />
+              <RoomChat messages={chatMessages} onSendMessage={handleSendMessage} pending={pendingAction === "chat"} />
 
               {/* Controls and Stats */}
               <MusicControls
