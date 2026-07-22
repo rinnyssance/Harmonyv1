@@ -11,7 +11,7 @@ import {
   type RoomStore,
 } from "./lib/room-store.js";
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT ?? process.env.DEV_PORT) || 3000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const SAFE_COLOR = "#F4B07A";
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
@@ -40,9 +40,9 @@ function createOriginGuard() {
 
   return (origin: string | undefined, callback: (error: Error | null, allowed?: boolean) => void) => {
     if (!origin) return callback(null, true);
-    if (!process.env.VERCEL && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-      return callback(null, true);
-    }
+    // Outside of Vercel (local dev and the v0 preview proxy), the request origin is
+    // the dev host or a proxied preview domain rather than a configured URL, so allow it.
+    if (!process.env.VERCEL) return callback(null, true);
     if (allowedOrigins.has(origin)) return callback(null, true);
     return callback(new Error("Origin is not allowed by Harmony."));
   };
