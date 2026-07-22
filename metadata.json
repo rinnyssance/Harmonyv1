@@ -1,0 +1,6 @@
+{
+  "name": "Harmony",
+  "description": "A collaborative, dreamy sunset piano and music room experience to relax and compose music together.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
