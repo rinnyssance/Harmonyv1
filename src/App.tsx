@@ -118,98 +118,448 @@ export default function App() {
       }
     });
 
-    socket/o7ï[h‘éì¶»§q«^t           <div
-                    className="absolute z-20"
-                    style={{
-                      width: "64%",
-                      height: "64%",
-                      right: "-32%",
-                      top: 0,
-                    }}
-                  >
-                    {(() => {
-                      const bkLocalActive = localPressed.has(blackKey.note);
-                      const bkRemoteActive = remotePressedKeys.get(blackKey.note);
-                      const bkActive = bkLocalActive || !!bkRemoteActive;
-                      const bkHighlighted = isGuideNote(blackKey.note);
-                      const bkAllowed = isNoteAllowed(blackKey.note);
-                      const bkActiveColor = bkLocalActive ? userColor : bkRemoteActive?.color || "#D69A97";
-                      const bkActiveUser = bkRemoteActive ? bkRemoteActive.username : (bkLocalActive ? "You" : "");
+    socket.on("disconnect", () => {
+      if (!intentionalCleanup) setConnectionState(activeRoomId ? "reconnecting" : "offline");
+    });
+    socket.on("connect_error", () => setConnectionState(activeRoomId ? "reconnecting" : "offline"));
+    socket.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
 
-                      return (
-                        <button
-                          onMouseDown={(e) => {
-                            e.stopPropagation();
-                            handleMouseDown(blackKey.note);
-                          }}
-                          onMouseEnter={(e) => {
-                            e.stopPropagation();
-                            handleMouseEnter(blackKey.note);
-                          }}
-                          onMouseLeave={(e) => {
-                            e.stopPropagation();
-                            handleMouseLeave(blackKey.note);
-                          }}
-                          onMouseUp={(e) => {
-                            e.stopPropagation();
-                            handleMouseUp(blackKey.note);
-                          }}
-                          onTouchStart={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleMouseDown(blackKey.note);
-                          }}
-                          onTouchEnd={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleMouseUp(blackKey.note);
-                          }}
-                          className={`w-full h-full rounded-b-[6px] flex flex-col justify-end items-center pb-2.5 cursor-pointer outline-none transition-all duration-150 border-x border-b border-black/40 select-none ${
-                            bkActive
-                              ? "shadow-inner border-t-[3px] border-[#6E73B8]/30"
-                              : "bg-[#2D3346] hover:bg-[#394056] shadow-[0_4px_4px_rgba(0,0,0,0.4)]"
-                          } ${duetMode && !bkAllowed ? "opacity-55" : ""}`}
-                          style={{
-                            backgroundColor: bkActive ? "#D69A97" : bkHighlighted ? "#4A4E70" : undefined,
-                            boxShadow: bkActive
-                              ? `0 0 20px ${bkActiveColor}, 0 4px 5px rgba(0,0,0,0.2)`
-                              : undefined,
-                          }}
-                        >
-                          {/* Inner reflection edge */}
-                          <div className="absolute inset-x-0.5 top-0 h-[4px] bg-white/15 rounded-b-xs pointer-events-none" />
-                          {bkHighlighted && !bkActive && <span className="absolute bottom-9 w-1.5 h-1.5 rounded-full bg-[#F4B07A] shadow-[0_0_8px_#F4B07A]" />}
+    socket.on("rooms:list", (roomsList: Room[]) => {
+      setRooms(roomsList);
+    });
 
-                          {/* Remote playing indicator on black key */}
-                          {bkRemoteActive && (
-                            <div className="absolute top-6 left-0.5 right-0.5 flex flex-col items-center pointer-events-none">
-                              <span className="text-[7.5px] font-sans px-1 py-0.5 rounded-sm bg-black/80 text-[#F8F6F4] scale-90 truncate max-w-[40px]">
-                                {bkActiveUser}
-                              </span>
-                            </div>
-                          )}
+    socket.on("room:users", (usersList: User[]) => {
+      setRoomUsers(usersList);
+    });
 
-                          {/* Keyboard label for black key */}
-                          {showLabels && (
-                            <div className="flex flex-col items-center pointer-events-none">
-                              <span className="text-[9px] font-mono font-medium text-[#E2D9D6]/65">
-                                {blackKey.keyLabel}
-                              </span>
-                              <span className="text-[7px] font-sans font-medium text-[#E2D9D6]/35 leading-tight">
-                                {blackKey.note}
-                              </span>
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+    socket.on("user:joined", ({ username, color }) => {
+      // Show soft visual flash or console note (no windows.alert)
+      console.log(`${username} joined room`);
+    });
+
+    socket.on("piano:note_on", ({ note, velocity, color, username }) => {
+      // Play sound locally through synthesizers
+      audioEngine.playNote(note, velocity || 0.85);
+
+      // Track note press state for remote keys
+      setRemotePressedKeys((prev) => {
+        const next = new Map(prev);
+        next.set(note, { color, username });
+        return next;
+      });
+
+      // Spawn a beautiful particle on the sky matching key position
+      spawnParticle(note, color);
+      setSkyEnergy((energy) => Math.min(1, energy + 0.18));
+    });
+
+    socket.on("piano:note_off", ({ note }) => {
+      // Stop sound
+      audioEngine.stopNote(note);
+
+      // Remove from remote pressed map
+      setRemotePressedKeys((prev) => {
+        const next = new Map(prev);
+        next.delete(note);
+        return next;
+      });
+    });
+
+    // Faint global pulses from other players to make the sky animate
+    socket.on("global:note_played", ({ roomId, note, color }) => {
+      // If we are not in that room, just spawn a soft floating particle in our backdrop
+      if (activeRoomId !== roomId) {
+        spawnParticle(note, color, true); // subtle backdrop-only particle
+        setSkyEnergy((energy) => Math.min(1, energy + 0.06));
+      }
+    });
+
+    socket.on("room:created", ({ roomId, accessCode }) => {
+      // Join created room automatically
+      handleJoinRoom(roomId, currentUser.username, currentUser.color, accessCode);
+    });
+
+    socket.on("room:joined", ({ roomId, accessCode }) => {
+      setJoinError("");
+      setActiveRoomCode(accessCode);
+      setActiveRoomId(roomId);
+      audioEngine.init();
+    });
+
+    socket.on("room:error", (message: string) => {
+      setJoinError(message);
+      inviteAttemptedRef.current = false;
+    });
+
+    socket.on("chat:history", (messages: ChatMessage[]) => setChatMessages(messages));
+    socket.on("chat:message", (message: ChatMessage) => {
+      setChatMessages((messages) => [...messages.slice(-99), message]);
+    });
+
+    return () => {
+      intentionalCleanup = true;
+      socket.disconnect();
+    };
+  }, [activeRoomId, activeRoomCode, currentUser]);
+
+  // Helper to spawn notes rise up and fade as glowing particles
+  const spawnParticle = (note: string, color: string, isBackdropSubtle: boolean = false) => {
+    const noteIndex = PIANO_NOTES.findIndex((n) => n.note === note);
+    const totalNotes = PIANO_NOTES.length;
+    // Calculate fractional position on screen
+    const ratio = noteIndex !== -1 ? (noteIndex + 1.5) / (totalNotes + 2) : Math.random();
+
+    const x = ratio * window.innerWidth + (Math.random() * 50 - 25);
+    // Start particles near bottom of screen (above piano) or floating high if backdrop-only
+    const y = isBackdropSubtle 
+      ? window.innerHeight * 0.7 + (Math.random() * 80)
+      : window.innerHeight - 300 + (Math.random() * 20);
+
+    const size = isBackdropSubtle 
+      ? Math.random() * 3 + 2 // smaller background particles
+      : Math.random() * 5.5 + 4; // bigger active keybed notes
+
+    const newParticle: Particle = {
+      id: `${note}-${Date.now()}-${Math.random()}`,
+      x,
+      y,
+      color,
+      note,
+      size,
+      vx: Math.random() * 0.8 - 0.4, // float slightly left/right
+      vy: isBackdropSubtle 
+        ? -(Math.random() * 0.6 + 0.4) // slower background drift
+        : -(Math.random() * 1.6 + 1.4), // upward speed
+      opacity: isBackdropSubtle ? 0.6 : 1.0,
+      createdAt: Date.now()
+    };
+
+    setParticles((prev) => [...prev, newParticle]);
+  };
+
+  const handleCreateRoom = (roomName: string, isPrivate: boolean, accessCode?: string) => {
+    if (socketRef.current) {
+      socketRef.current.emit("room:create", { name: roomName, isPrivate, accessCode });
+    }
+  };
+
+  const handleJoinRoom = (roomId: string, username: string, color: string, accessCode?: string) => {
+    setJoinError("");
+    setChatMessages([]);
+    if (socketRef.current) {
+      socketRef.current.emit("room:join", { roomId, username, color, accessCode });
+    }
+  };
+
+  const handleLeaveRoom = () => {
+    setActiveRoomId(null);
+    setRoomUsers([]);
+    setRemotePressedKeys(new Map());
+    setActiveRoomCode(undefined);
+    setJoinError("");
+    audioEngine.stopAll();
+    if (socketRef.current) {
+      // Re-fetch rooms list
+      socketRef.current.emit("room:join", { roomId: "lobby", username: currentUser.username, color: currentUser.color });
+    }
+  };
+
+  // Local user plays a piano note
+  const handleNotePlay = (note: string, color: string, velocity = 0.85) => {
+    // Spawn particle locally
+    spawnParticle(note, color);
+    setSkyEnergy((energy) => Math.min(1, energy + 0.14 + velocity * 0.08));
+
+    // Broadcast event
+    if (socketRef.current && activeRoomId) {
+      socketRef.current.emit("piano:note_on", {
+        roomId: activeRoomId,
+        note,
+        velocity,
+        color,
+        username: currentUser.username
+      });
+    }
+  };
+
+  const handleNoteStop = (note: string) => {
+    if (socketRef.current && activeRoomId) {
+      socketRef.current.emit("piano:note_off", {
+        roomId: activeRoomId,
+        note
+      });
+    }
+  };
+
+  const handleSendMessage = (text: string) => {
+    if (socketRef.current && activeRoomId) socketRef.current.emit("chat:send", { roomId: activeRoomId, text });
+  };
+
+  useEffect(() => {
+    if (!midiEnabled || !activeRoomId) {
+      setMidiStatus("No MIDI keyboard connected");
+      return;
+    }
+
+    const nav = navigator as any;
+    if (!nav.requestMIDIAccess) {
+      setMidiStatus("MIDI is not supported in this browser");
+      setMidiEnabled(false);
+      return;
+    }
+
+    let access: any;
+    const activeMidiNotes = new Set<string>();
+    const noteFromMidi = (number: number) => {
+      const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+      return `${names[number % 12]}${Math.floor(number / 12) - 1}`;
+    };
+    const isAllowed = (note: string) => {
+      if (!duetMode) return true;
+      const index = PIANO_NOTES.findIndex((item) => item.note === note);
+      return index >= 0 && (duetSide === "lower" ? index < 12 : index >= 12);
+    };
+    const handleMidi = (event: any) => {
+      const [command, number, velocity = 0] = event.data;
+      const note = noteFromMidi(number);
+      if (!PIANO_NOTES.some((item) => item.note === note) || !isAllowed(note)) return;
+      const kind = command & 0xf0;
+      if (kind === 0x90 && velocity > 0) {
+        if (activeMidiNotes.has(note)) return;
+        activeMidiNotes.add(note);
+        audioEngine.playNote(note, velocity / 127);
+        handleNotePlay(note, currentUser.color, velocity / 127);
+      } else if (kind === 0x80 || (kind === 0x90 && velocity === 0)) {
+        activeMidiNotes.delete(note);
+        audioEngine.stopNote(note);
+        handleNoteStop(note);
+      }
+    };
+    const bindInputs = () => {
+      const inputs = Array.from(access.inputs.values()) as any[];
+      inputs.forEach((input) => { input.onmidimessage = handleMidi; });
+      setMidiStatus(inputs.length ? `${inputs.length} MIDI input${inputs.length === 1 ? "" : "s"} connected` : "MIDI enabled â€” connect a keyboard");
+    };
+
+    nav.requestMIDIAccess().then((midiAccess: any) => {
+      access = midiAccess;
+      bindInputs();
+      access.onstatechange = bindInputs;
+    }).catch(() => {
+      setMidiStatus("MIDI permission was not granted");
+      setMidiEnabled(false);
+    });
+
+    return () => {
+      if (access) {
+        access.onstatechange = null;
+        for (const input of access.inputs.values()) input.onmidimessage = null;
+      }
+      activeMidiNotes.forEach((note) => audioEngine.stopNote(note));
+    };
+  }, [midiEnabled, activeRoomId, currentUser.color, duetMode, duetSide]);
+
+  const currentRoom = rooms.find((r) => r.id === activeRoomId);
+  const currentRoomName = currentRoom ? currentRoom.name : "Sunset Session";
+
+  return (
+    <div id="harmony-root" className="relative w-full min-h-screen flex flex-col justify-between overflow-x-hidden font-sans select-none">
+      {/* Background Animated Living Sky */}
+      <LivingSky particles={particles} setParticles={setParticles} energy={skyEnergy} />
+
+      <WelcomeTour open={showTour} onClose={closeTour} />
+
+      <AnimatePresence>
+        {connectionState !== "connected" && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="fixed left-1/2 top-3 z-[80] -translate-x-1/2 flex items-center gap-2 rounded-full border border-white/15 bg-[#5E639F]/90 px-4 py-2 text-[11px] font-medium text-[#F8F6F4] shadow-lg backdrop-blur-xl"
+            role="status"
+          >
+            {connectionState === "offline" ? <WifiOff className="h-3.5 w-3.5 text-[#F4B07A]" /> : <LoaderCircle className="h-3.5 w-3.5 animate-spin text-[#F4B07A]" />}
+            {connectionState === "reconnecting" ? "Returning to your roomâ€¦" : connectionState === "offline" ? "Connection paused â€” retryingâ€¦" : "Connecting to Harmonyâ€¦"}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Header Bar */}
+      <header className="relative z-10 w-full max-w-7xl mx-auto px-6 py-5 flex items-center justify-between select-none">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3">
+            <motion.div
+              animate={{ rotate: [0, 10, -10, 0] }}
+              transition={{ repeat: Infinity, duration: 6, ease: "easeInOut" }}
+              className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#F4B07A] to-[#E8A15A] flex items-center justify-center shadow-lg cursor-pointer"
+              onClick={activeRoomId ? handleLeaveRoom : undefined}
+            >
+              <Sunset className="w-5 h-5 text-[#6E73B8]" />
+            </motion.div>
+            <div>
+              <h1 className="text-xl font-display font-bold tracking-widest text-[#F8F6F4] flex items-center gap-1.5">
+                HARMONY
+                <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full bg-white/10 text-[#E2D9D6] tracking-normal">
+                  BETA
+                </span>
+              </h1>
+              <p className="text-[9px] font-mono tracking-widest text-[#E2D9D6]/60 uppercase">Cooperative Piano</p>
+            </div>
+          </div>
+
+          {/* Aesthetic Immersive Navigation Links */}
+          <nav className="hidden md:flex items-center gap-6 ml-6 text-xs font-sans font-medium text-[#E2D9D6]/80">
+            <span className="hover:text-[#F8F6F4] transition-colors cursor-pointer relative after:absolute after:bottom-[-4px] after:left-0 after:w-0 hover:after:w-full after:h-[1.5px] after:bg-[#F4B07A] after:transition-all">Discover</span>
+            <span className="hover:text-[#F8F6F4] transition-colors cursor-pointer relative after:absolute after:bottom-[-4px] after:left-0 after:w-0 hover:after:w-full after:h-[1.5px] after:bg-[#F4B07A] after:transition-all">Studios</span>
+            <span className="hover:text-[#F8F6F4] transition-colors cursor-pointer relative after:absolute after:bottom-[-4px] after:left-0 after:w-0 hover:after:w-full after:h-[1.5px] after:bg-[#F4B07A] after:transition-all">Instruments</span>
+          </nav>
         </div>
-      </div>
+
+        {/* Global info and User profile aura */}
+        <div className="flex items-center gap-4 text-xs font-mono text-[#F8F6F4]">
+          <button type="button" onClick={() => setShowTour(true)} className="grid h-8 w-8 place-items-center rounded-full border border-white/10 bg-white/5 hover:bg-white/10" title="Replay the welcome tour" aria-label="Replay the welcome tour"><CircleHelp className="h-4 w-4 text-[#E2D9D6]" /></button>
+          <button
+            type="button"
+            onClick={() => setSoundEnabled((enabled) => !enabled)}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full border backdrop-blur-md transition-all ${soundEnabled ? "bg-white/5 border-white/10 hover:bg-white/10" : "bg-[#D69A97]/20 border-[#D69A97]/40 text-[#F8F6F4]"}`}
+            title={soundEnabled ? "Turn all sound off" : "Turn sound on"}
+            aria-pressed={!soundEnabled}
+          >
+            {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-[#F4B07A]" /> : <VolumeX className="w-3.5 h-3.5 text-[#D69A97]" />}
+            <span className="hidden sm:inline">SOUND {soundEnabled ? "ON" : "OFF"}</span>
+          </button>
+          <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
+            <Users className="w-3.5 h-3.5 text-[#F4B07A]" />
+            <span>{rooms.reduce((acc, r) => acc + Object.keys(r.users || {}).length, 0)} MUSICIANS ONLINE</span>
+          </div>
+
+          {/* Current user's glowing aura indicator */}
+          <div className="flex items-center gap-2">
+            <span className="hidden md:inline text-xs font-sans font-medium text-[#E2D9D6]">
+              {currentUser.username || "Musician"}
+            </span>
+            <div 
+              className="w-9 h-9 rounded-full border-2 border-[#F8F6F4] transition-all duration-300"
+              style={{ 
+                backgroundColor: currentUser.color,
+                boxShadow: `0 0 12px ${currentUser.color}`
+              }}
+              title="Your Active Aura"
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="relative z-10 w-full max-w-7xl mx-auto px-3 sm:px-6 py-2 flex-1 flex flex-col justify-center items-center">
+        <AnimatePresence mode="wait">
+          {!activeRoomId ? (
+            /* Lobby Screen */
+            <motion.div
+              key="lobby"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+              className="w-full flex flex-col items-center gap-8"
+            >
+              {/* Brand introduction */}
+              <div className="text-center max-w-2xl px-4 mt-2 mb-2">
+                <motion.h2
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.1, duration: 0.6 }}
+                  className="text-4xl sm:text-5xl font-display font-bold text-[#F8F6F4] tracking-tight leading-none mb-3"
+                >
+                  Make music at <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#F4B07A] to-[#E8A15A]">sunset</span> together
+                </motion.h2>
+                <p className="text-sm sm:text-base font-sans text-[#E2D9D6] leading-relaxed max-w-lg mx-auto">
+                  Harmony is a peaceful, dreamy space where sounds float like clouds. Pick an aura, join a sunset room, and create beautiful ambient melodies.
+                </p>
+              </div>
+
+              {/* Lobby component */}
+              <RoomLobby
+                rooms={rooms}
+                onCreateRoom={handleCreateRoom}
+                onJoinRoom={handleJoinRoom}
+                currentUser={currentUser}
+                setCurrentUser={setCurrentUser}
+                joinError={joinError}
+              />
+            </motion.div>
+          ) : (
+            /* Interactive Piano Session Screen */
+            <motion.div
+              key="session"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+              className="w-full flex flex-col gap-6"
+            >
+              {/* Interactive Piano */}
+              <VirtualPiano
+                roomId={activeRoomId}
+                userColor={currentUser.color}
+                username={currentUser.username}
+                onNotePlay={handleNotePlay}
+                onNoteStop={handleNoteStop}
+                remotePressedKeys={remotePressedKeys}
+                duetMode={duetMode}
+                duetSide={duetSide}
+                highlightedPitchClasses={highlightedPitchClasses}
+                soundEnabled={soundEnabled}
+              />
+
+              <SessionTools
+                roomId={activeRoomId}
+                accessCode={activeRoomCode}
+                duetMode={duetMode}
+                duetSide={duetSide}
+                onDuetModeChange={setDuetMode}
+                onDuetSideChange={setDuetSide}
+                guideRoot={guideRoot}
+                guideMode={guideMode}
+                onGuideRootChange={setGuideRoot}
+                onGuideModeChange={setGuideMode}
+                midiEnabled={midiEnabled}
+                midiStatus={midiStatus}
+                onMidiToggle={() => setMidiEnabled((enabled) => !enabled)}
+                soundEnabled={soundEnabled}
+              />
+
+              <RoomChat messages={chatMessages} onSendMessage={handleSendMessage} />
+
+              {/* Controls and Stats */}
+              <MusicControls
+                currentRoomName={currentRoomName}
+                roomUsers={roomUsers}
+                onLeaveRoom={handleLeaveRoom}
+                onPlayDemoNote={(note) => handleNotePlay(note, currentUser.color, 0.75)}
+                onStopDemoNote={handleNoteStop}
+                soundEnabled={soundEnabled}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+
+      {/* Footer credits */}
+      <footer className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-[10px] font-mono text-[#E2D9D6]/40 select-none">
+        <div className="flex items-center gap-1.5">
+          <Star className="w-3.5 h-3.5 text-[#E8A15A] fill-current animate-pulse" />
+          <span>INSPIRED BY GOLDEN HOUR SKIES & PREMIUM AMBIENT SYNTHS</span>
+        </div>
+        <div className="flex items-center gap-1 text-[#F8F6F4]/70 tracking-[0.18em]">
+          <span>CREATED BY RINNYSSANCE</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span>DESIGNED WITH</span>
+          <Heart className="w-3 h-3 text-[#D69A97] fill-current" />
+          <span>FOR CREATIVE COOPERATION</span>
+        </div>
+      </footer>
     </div>
   );
-};
+}
