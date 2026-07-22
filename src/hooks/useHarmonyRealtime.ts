@@ -39,7 +39,11 @@ interface Options {
 }
 
 const friendlyError = (value: unknown) => {
-  const message = value instanceof Error ? value.message : String(value || "");
+  const message = value instanceof Error
+    ? value.message
+    : typeof value === "object" && value !== null && "message" in value
+      ? String((value as { message?: unknown }).message || "")
+      : String(value || "");
   if (/anonymous sign-ins are disabled/i.test(message)) return "Guest access is not enabled yet. Please try again shortly.";
   if (/fetch|network|websocket|timed out/i.test(message)) return "Harmony could not reach the room service. Check your connection and retry.";
   return message.replace(/^.*?: /, "") || "Something interrupted the room connection.";
