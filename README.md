@@ -126,9 +126,8 @@ Harmony is built as a modern web application using technologies including:
 - Vite
 - Web Audio API
 - Web MIDI API
-- Socket.IO
-- Redis
-- Vercel Functions
+- Supabase Auth, Postgres, and Realtime
+- Vercel
 
 ---
 
@@ -162,12 +161,15 @@ cd Harmonyv1
 
 npm install
 
+# Copy .env.example to .env.local and add your public Supabase project values.
 npm run dev
 ```
 
 Then open your browser to the local development server shown in the terminal.
 
-Redis is optional locally. Without `REDIS_URL`, Harmony uses in-memory rooms and chat for development.
+Supabase anonymous guest sign-in must be enabled. The database migrations in
+`supabase/migrations` create the room RPCs, RLS policies, permanent rooms,
+Realtime authorization, and stale-room cleanup.
 
 ## Checks
 
@@ -180,13 +182,14 @@ npm run build
 
 # Deploying to Vercel
 
-1. Import this repository into Vercel.
-2. Install a Redis provider from the Vercel Marketplace.
-3. Add its connection string as `REDIS_URL` in Production, Preview, and Development.
-4. If you use a custom domain, set `APP_URL` to its full `https://` origin.
-5. Deploy and verify `/api/health` returns `200` with `"storage": "redis"`.
-
-Redis is required on Vercel because WebSocket connections can land on different Function instances. It stores rooms and chat while the Socket.IO Redis adapter distributes live notes, presence, and messages across those instances.
+1. Import this repository into Vercel and keep the Vite framework preset.
+2. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` to Development,
+   Preview, and Production. The existing Supabase Marketplace names
+   `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are also
+   recognized for compatibility.
+3. Never add a Supabase service-role or secret key to Vercel's browser build.
+4. Deploy, open the lobby, and create or join a room. The piano opens only after
+   its authenticated private Realtime channel is subscribed.
 
 ---
 

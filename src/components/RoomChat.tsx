@@ -4,10 +4,11 @@ import { ChatMessage } from "../types";
 
 interface RoomChatProps {
   messages: ChatMessage[];
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string) => Promise<void>;
+  pending?: boolean;
 }
 
-export const RoomChat: React.FC<RoomChatProps> = ({ messages, onSendMessage }) => {
+export const RoomChat: React.FC<RoomChatProps> = ({ messages, onSendMessage, pending = false }) => {
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -15,12 +16,16 @@ export const RoomChat: React.FC<RoomChatProps> = ({ messages, onSendMessage }) =
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages]);
 
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const message = text.trim();
     if (!message) return;
-    onSendMessage(message);
-    setText("");
+    try {
+      await onSendMessage(message);
+      setText("");
+    } catch {
+      // Keep the draft so the user can retry.
+    }
   };
 
   return (
@@ -53,7 +58,7 @@ export const RoomChat: React.FC<RoomChatProps> = ({ messages, onSendMessage }) =
 
       <form onSubmit={submit} className="flex gap-2 mt-3">
         <input value={text} onChange={(event) => setText(event.target.value)} maxLength={280} placeholder="Write something kind…" className="flex-1 min-w-0 bg-black/15 border border-white/10 rounded-xl px-4 py-2.5 text-xs outline-none focus:border-[#F4B07A]/60 placeholder-white/30" />
-        <button type="submit" disabled={!text.trim()} className="btn-sunset rounded-xl px-4 py-2.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"><Send className="w-3.5 h-3.5" /></button>
+        <button type="submit" disabled={!text.trim() || pending} className="btn-sunset rounded-xl px-4 py-2.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"><Send className="w-3.5 h-3.5" /></button>
       </form>
     </section>
   );

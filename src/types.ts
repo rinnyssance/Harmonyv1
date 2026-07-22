@@ -8,7 +8,17 @@ export interface Room {
   name: string;
   notesCount: number;
   users: User[];
-  isPrivate?: boolean;
+  isPrivate: boolean;
+  activeUserCount: number;
+}
+
+export interface RoomSession {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  hostId: string | null;
+  realtimeTopic: string;
+  creatorAccessCode?: string;
 }
 
 export interface NoteEvent {
@@ -16,7 +26,7 @@ export interface NoteEvent {
   velocity: number;
   color: string;
   username: string;
-  socketId?: string;
+  userId?: string;
 }
 
 export interface ChatMessage {
